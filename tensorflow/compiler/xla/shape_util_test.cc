@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/shape_util.h"
 
 #include "tensorflow/compiler/xla/layout_util.h"
+#include "tensorflow/compiler/xla/status_macros.h"
 #include "tensorflow/compiler/xla/test.h"
 #include "tensorflow/compiler/xla/test_helpers.h"
 #include "tensorflow/compiler/xla/types.h"
@@ -71,11 +72,79 @@ TEST(ShapeUtilTest, Rank4DimensionIndexing) {
 
 TEST(ShapeUtilTest, ParseShapeStringR2F32) {
   string shape_string = "f32[123,456]";
-  Shape actual = ShapeUtil::ParseShapeString(shape_string).ValueOrDie();
+  TF_ASSERT_OK_AND_ASSIGN(Shape actual,
+                          ShapeUtil::ParseShapeString(shape_string));
   Shape expected = ShapeUtil::MakeShape(F32, {123, 456});
   ASSERT_TRUE(ShapeUtil::Equal(expected, actual))
       << "expected: " << ShapeUtil::HumanString(expected)
       << "actual:   " << ShapeUtil::HumanString(actual);
+}
+
+TEST(ShapeUtilTest, ParseShapeStringTupleOfArrays) {
+  string shape_string = "(f32[1572864],s8[5120,1024])";
+  TF_ASSERT_OK_AND_ASSIGN(Shape actual,
+                          ShapeUtil::ParseShapeString(shape_string));
+  Shape expected =
+      ShapeUtil::MakeTupleShape({ShapeUtil::MakeShape(F32, {1572864}),
+                                 ShapeUtil::MakeShape(S8, {5120, 1024})});
+  ASSERT_TRUE(ShapeUtil::Equal(expected, actual))
+      << "expected: " << ShapeUtil::HumanString(expected)
+      << "actual:   " << ShapeUtil::HumanString(actual);
+}
+
+TEST(ShapeUtilTest, ParseShapeStringNestedTuple) {
+  string shape_string = "(f32[1],(f32[2]), f32[3])";
+  TF_ASSERT_OK_AND_ASSIGN(Shape actual,
+                          ShapeUtil::ParseShapeString(shape_string));
+  Shape expected = ShapeUtil::MakeTupleShape({
+      ShapeUtil::MakeShape(F32, {1}),
+      ShapeUtil::MakeTupleShape({ShapeUtil::MakeShape(F32, {2})}),
+      ShapeUtil::MakeShape(F32, {3}),
+  });
+  ASSERT_TRUE(ShapeUtil::Equal(expected, actual))
+      << "expected: " << ShapeUtil::HumanString(expected)
+      << "actual:   " << ShapeUtil::HumanString(actual);
+}
+
+TEST(ShapeUtilTest, ParseShapeStringWithLayout) {
+  string shape_string = "f32[123,456]{0,1}";
+  TF_ASSERT_OK_AND_ASSIGN(Shape actual,
+                          ShapeUtil::ParseShapeString(shape_string));
+  Shape expected = ShapeUtil::MakeShapeWithLayout(F32, {123, 456}, {0, 1});
+  ASSERT_TRUE(ShapeUtil::Equal(expected, actual))
+      << "expected: " << ShapeUtil::HumanString(expected)
+      << "actual:   " << ShapeUtil::HumanString(actual);
+}
+
+TEST(ShapeUtilTest, ParseShapeStringWithExplicitDenseLayout) {
+  string shape_string = "f32[123,456]dense{0,1}";
+  TF_ASSERT_OK_AND_ASSIGN(Shape actual,
+                          ShapeUtil::ParseShapeString(shape_string));
+  Shape expected = ShapeUtil::MakeShapeWithLayout(F32, {123, 456}, {0, 1});
+  ASSERT_TRUE(ShapeUtil::Equal(expected, actual))
+      << "expected: " << ShapeUtil::HumanString(expected)
+      << "actual:   " << ShapeUtil::HumanString(actual);
+}
+
+TEST(ShapeUtilTest, ParseShapeStringWithSparseLayout) {
+  string shape_string = "f32[123,456]sparse{10}";
+  TF_ASSERT_OK_AND_ASSIGN(Shape actual,
+                          ShapeUtil::ParseShapeString(shape_string));
+  Shape expected = ShapeUtil::MakeShapeWithSparseLayout(F32, {123, 456}, 10);
+  ASSERT_TRUE(ShapeUtil::Equal(expected, actual))
+      << "expected: " << ShapeUtil::HumanString(expected)
+      << "actual: " << ShapeUtil::HumanString(actual);
+}
+
+TEST(ShapeUtilTest, ParseInvalidShapeString) {
+  string shape_strings[] = {
+      "f32[123,456]foobar{0,1}", "f32[123,456]sparse{0,1}", "f32[123,456]{foo}",
+      "f32[123,456]dense{foo}",  "f32[123,456]sparse{foo}",
+  };
+  for (const string& shape_string : shape_strings) {
+    StatusOr<Shape> result = ShapeUtil::ParseShapeString(shape_string);
+    ASSERT_FALSE(result.ok()) << "shape: " << shape_string;
+  }
 }
 
 TEST(ShapeUtilTest, CompatibleIdenticalShapes) {
@@ -121,6 +190,7 @@ TEST(ShapeUtilTest, IncompatibleTuplesWithSwappedElements) {
   Shape tuple2 = ShapeUtil::MakeTupleShape(
       {ShapeUtil::MakeShape(F32, {3, 2}), ShapeUtil::MakeShape(PRED, {4, 5})});
   EXPECT_FALSE(ShapeUtil::Compatible(tuple1, tuple2));
+  EXPECT_FALSE(ShapeUtil::CompatibleIgnoringElementType(tuple1, tuple2));
 }
 
 TEST(ShapeUtilTest, IncompatibleTuplesWithDifferentPrimitiveType) {
@@ -129,6 +199,7 @@ TEST(ShapeUtilTest, IncompatibleTuplesWithDifferentPrimitiveType) {
   Shape tuple2 = ShapeUtil::MakeTupleShape(
       {ShapeUtil::MakeShape(PRED, {4, 5}), ShapeUtil::MakeShape(S32, {3, 2})});
   EXPECT_FALSE(ShapeUtil::Compatible(tuple1, tuple2));
+  EXPECT_TRUE(ShapeUtil::CompatibleIgnoringElementType(tuple1, tuple2));
 }
 
 TEST(ShapeUtilTest, IncompatibleTuplesWithDifferentDimensions) {
@@ -137,20 +208,6 @@ TEST(ShapeUtilTest, IncompatibleTuplesWithDifferentDimensions) {
   Shape tuple2 = ShapeUtil::MakeTupleShape(
       {ShapeUtil::MakeShape(PRED, {4, 5}), ShapeUtil::MakeShape(F32, {4, 2})});
   EXPECT_FALSE(ShapeUtil::Compatible(tuple1, tuple2));
-}
-
-TEST(ShapeUtilTest, EmptyLayoutEqualsMissingLayout) {
-  // A shape with a missing layout should be equal to a shape with an empty
-  // layout.
-  Shape scalar1 = ShapeUtil::MakeShape(F32, {});
-  Shape scalar2 = ShapeUtil::MakeShape(F32, {});
-
-  EXPECT_TRUE(ShapeUtil::Equal(scalar1, scalar2));
-
-  scalar1.clear_layout();    // Remove layout field.
-  scalar2.mutable_layout();  // Create empty layout field.
-
-  EXPECT_TRUE(ShapeUtil::Equal(scalar1, scalar2));
 }
 
 TEST(ShapeUtilTest, CompareShapesWithPaddedDimensionsMismatch) {
@@ -173,17 +230,17 @@ TEST(ShapeUtilTest, CompareShapesWithPaddingValueMismatch) {
   EXPECT_FALSE(ShapeUtil::Equal(shape1, shape2));
 }
 
-TEST(ShapeUtilTest, ScalarUnpopulatedLayoutEqualsScalarLayout) {
-  Shape scalar_unpopulated = ShapeUtil::MakeShape(F32, {});
-  scalar_unpopulated.clear_layout();
-  ASSERT_FALSE(scalar_unpopulated.has_layout())
-      << ShapeUtil::HumanStringWithLayout(scalar_unpopulated);
+TEST(ShapeUtilTest, ScalarDefaultLayoutEqualsScalarEmptyMin2Maj) {
+  Shape scalar_default_layout = ShapeUtil::MakeShape(F32, {});
+  ASSERT_TRUE(scalar_default_layout.has_layout())
+      << ShapeUtil::HumanStringWithLayout(scalar_default_layout);
 
-  const Shape scalar_populated = ShapeUtil::MakeShapeWithLayout(F32, {}, {});
-  ASSERT_TRUE(scalar_populated.has_layout())
-      << ShapeUtil::HumanStringWithLayout(scalar_populated);
+  const Shape scalar_empty_min2maj =
+      ShapeUtil::MakeShapeWithLayout(F32, {}, {});
+  ASSERT_TRUE(scalar_empty_min2maj.has_layout())
+      << ShapeUtil::HumanStringWithLayout(scalar_empty_min2maj);
 
-  EXPECT_TRUE(ShapeUtil::Equal(scalar_unpopulated, scalar_populated));
+  EXPECT_TRUE(ShapeUtil::Equal(scalar_default_layout, scalar_empty_min2maj));
 }
 
 TEST(ShapeUtilTest, ByteSizeOfWithoutPadding) {
@@ -194,6 +251,10 @@ TEST(ShapeUtilTest, ByteSizeOfWithoutPadding) {
   EXPECT_EQ(8, ShapeUtil::ByteSizeOfPrimitiveType(F64));
   EXPECT_EQ(8, ShapeUtil::ByteSizeOf(ShapeUtil::MakeShape(F64, {})));
   EXPECT_EQ(1600, ShapeUtil::ByteSizeOf(ShapeUtil::MakeShape(F64, {10, 20})));
+
+  EXPECT_EQ(8, ShapeUtil::ByteSizeOfPrimitiveType(C64));
+  EXPECT_EQ(8, ShapeUtil::ByteSizeOf(ShapeUtil::MakeShape(C64, {})));
+  EXPECT_EQ(1600, ShapeUtil::ByteSizeOf(ShapeUtil::MakeShape(C64, {10, 20})));
 }
 
 TEST(ShapeUtilTest, ByteSizeOfWithPadding) {
@@ -322,6 +383,30 @@ TEST(ShapeUtilTest, GetSubshape) {
                        ShapeUtil::GetSubshape(nested_tuple_shape, {2, 0})));
 }
 
+TEST(ShapeUtilTest, IsLeafIndex) {
+  // Test array shape.
+  Shape array_shape = ShapeUtil::MakeShape(F32, {42, 42, 123});
+  EXPECT_TRUE(ShapeUtil::IsLeafIndex(array_shape, {}));
+
+  // Test tuple shape.
+  Shape tuple_shape = ShapeUtil::MakeTupleShape({array_shape, array_shape});
+  EXPECT_FALSE(ShapeUtil::IsLeafIndex(tuple_shape, {}));
+  EXPECT_TRUE(ShapeUtil::IsLeafIndex(tuple_shape, {0}));
+  EXPECT_TRUE(ShapeUtil::IsLeafIndex(tuple_shape, {1}));
+
+  // Test nested tuple shape.
+  Shape nested_tuple_shape = ShapeUtil::MakeTupleShape(
+      {array_shape, ShapeUtil::MakeTupleShape({array_shape, array_shape}),
+       ShapeUtil::MakeTupleShape(
+           {ShapeUtil::MakeTupleShape({array_shape, array_shape}),
+            array_shape})});
+  EXPECT_FALSE(ShapeUtil::IsLeafIndex(nested_tuple_shape, {}));
+  EXPECT_TRUE(ShapeUtil::IsLeafIndex(nested_tuple_shape, {0}));
+  EXPECT_FALSE(ShapeUtil::IsLeafIndex(nested_tuple_shape, {1}));
+  EXPECT_TRUE(ShapeUtil::IsLeafIndex(nested_tuple_shape, {1, 0}));
+  EXPECT_TRUE(ShapeUtil::IsLeafIndex(nested_tuple_shape, {1, 1}));
+}
+
 TEST(ShapeUtilTest, HumanString) {
   Shape opaque = ShapeUtil::MakeOpaqueShape();
   Shape scalar = ShapeUtil::MakeShape(F32, {});
@@ -380,13 +465,12 @@ TEST(ShapeUtilTest, HumanString) {
 TEST(ShapeUtilTest, ForEachSubshapeArray) {
   const Shape shape = ShapeUtil::MakeShape(F32, {2, 3});
   int calls = 0;
-  EXPECT_IS_OK(ShapeUtil::ForEachSubshape(
+  ShapeUtil::ForEachSubshape(
       shape, [&calls, &shape](const Shape& subshape, const ShapeIndex& index) {
         EXPECT_EQ(&shape, &subshape);
         EXPECT_TRUE(index.empty());
         ++calls;
-        return tensorflow::Status::OK();
-      }));
+      });
   EXPECT_EQ(1, calls);
 }
 
@@ -396,7 +480,7 @@ TEST(ShapeUtilTest, ForEachSubshapeNestedTuple) {
        ShapeUtil::MakeTupleShape({ShapeUtil::MakeShape(F32, {101}),
                                   ShapeUtil::MakeShape(PRED, {33})})});
   int calls = 0;
-  EXPECT_IS_OK(ShapeUtil::ForEachSubshape(
+  ShapeUtil::ForEachSubshape(
       shape, [&calls, &shape](const Shape& subshape, const ShapeIndex& index) {
         EXPECT_TRUE(
             ShapeUtil::Equal(subshape, ShapeUtil::GetSubshape(shape, index)));
@@ -408,8 +492,7 @@ TEST(ShapeUtilTest, ForEachSubshapeNestedTuple) {
           EXPECT_EQ(33, ShapeUtil::ElementsIn(subshape));
         }
         ++calls;
-        return tensorflow::Status::OK();
-      }));
+      });
   EXPECT_EQ(5, calls);
 }
 
@@ -419,7 +502,7 @@ TEST(ShapeUtilTest, ForEachMutableSubshapeNestedTuple) {
        ShapeUtil::MakeTupleShape({ShapeUtil::MakeShape(F32, {101}),
                                   ShapeUtil::MakeShape(PRED, {33})})});
   int calls = 0;
-  EXPECT_IS_OK(ShapeUtil::ForEachMutableSubshape(
+  ShapeUtil::ForEachMutableSubshape(
       &shape, [&calls, &shape](const Shape* subshape, const ShapeIndex& index) {
         // Pointer values should be equal
         EXPECT_EQ(subshape, ShapeUtil::GetMutableSubshape(&shape, index));
@@ -431,8 +514,7 @@ TEST(ShapeUtilTest, ForEachMutableSubshapeNestedTuple) {
           EXPECT_EQ(33, ShapeUtil::ElementsIn(*subshape));
         }
         ++calls;
-        return tensorflow::Status::OK();
-      }));
+      });
   EXPECT_EQ(5, calls);
 }
 
@@ -444,6 +526,10 @@ TEST(ShapeUtilTest, InsertedOrDeleted1SizedDimensions) {
       ShapeUtil::InsertedOrDeleted1SizedDimensions(shape0, shape1)));
   EXPECT_FALSE(std::get<0>(
       ShapeUtil::InsertedOrDeleted1SizedDimensions(shape0, shape2)));
+}
+
+TEST(ShapeUtilTest, ShapeIs) {
+  EXPECT_FALSE(ShapeUtil::ShapeIs(ShapeUtil::MakeShape(PRED, {2}), PRED, {}));
 }
 
 TEST(ShapeUtilTest, ForEachIndex) {

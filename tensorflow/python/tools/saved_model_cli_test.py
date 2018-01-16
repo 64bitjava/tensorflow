@@ -28,6 +28,8 @@ import sys
 import numpy as np
 from six import StringIO
 
+from tensorflow.core.framework import types_pb2
+from tensorflow.core.protobuf import meta_graph_pb2
 from tensorflow.python.debug.wrappers import local_cli_wrapper
 from tensorflow.python.platform import test
 from tensorflow.python.tools import saved_model_cli
@@ -200,6 +202,14 @@ Method name is: tensorflow/serving/predict"""
     self.assertEqual(output, expected_output)
     self.assertEqual(err.getvalue().strip(), '')
 
+  def testPrintREFTypeTensor(self):
+    ref_tensor_info = meta_graph_pb2.TensorInfo()
+    ref_tensor_info.dtype = types_pb2.DT_FLOAT_REF
+    with captured_output() as (out, err):
+      saved_model_cli._print_tensor_info(ref_tensor_info)
+    self.assertTrue('DT_FLOAT_REF' in out.getvalue().strip())
+    self.assertEqual(err.getvalue().strip(), '')
+
   def testInputPreProcessFormats(self):
     input_str = 'input1=/path/file.txt[ab3];input2=file2'
     input_expr_str = 'input3=np.zeros([2,2]);input4=[4,5]'
@@ -217,7 +227,6 @@ Method name is: tensorflow/serving/predict"""
     input_str = (r'inputx=C:\Program Files\data.npz[v:0];'
                  r'input:0=c:\PROGRA~1\data.npy')
     input_dict = saved_model_cli.preprocess_inputs_arg_string(input_str)
-    print(input_dict)
     self.assertTrue(input_dict['inputx'] == (r'C:\Program Files\data.npz',
                                              'v:0'))
     self.assertTrue(input_dict['input:0'] == (r'c:\PROGRA~1\data.npy', None))
@@ -390,6 +399,16 @@ Method name is: tensorflow/serving/predict"""
     y_actual = np.load(output_file)
     y_expected = np.array([[2.5], [3.0]])
     self.assertAllClose(y_expected, y_actual)
+
+  def testRunCommandInvalidInputKeyError(self):
+    self.parser = saved_model_cli.create_parser()
+    base_path = test.test_src_dir_path(SAVED_MODEL_PATH)
+    args = self.parser.parse_args([
+        'run', '--dir', base_path, '--tag_set', 'serve', '--signature_def',
+        'regress_x2_to_y3', '--input_exprs', 'x2=np.ones((3,1))'
+    ])
+    with self.assertRaises(ValueError):
+      saved_model_cli.run(args)
 
   def testRunCommandOutputFileExistError(self):
     self.parser = saved_model_cli.create_parser()

@@ -20,9 +20,11 @@ from __future__ import print_function
 
 import numpy as np
 
+from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
-from tensorflow.python.framework import tensor_shape
+from tensorflow.python.framework import test_util
 from tensorflow.python.layers import convolutional as conv_layers
+from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import nn_ops
@@ -32,6 +34,7 @@ from tensorflow.python.ops import variables
 from tensorflow.python.platform import test
 
 
+@test_util.with_c_api
 class ConvTest(test.TestCase):
 
   def testInvalidDataFormat(self):
@@ -69,6 +72,13 @@ class ConvTest(test.TestCase):
     self.assertListEqual(layer.kernel.get_shape().as_list(), [3, 3, 4, 32])
     self.assertListEqual(layer.bias.get_shape().as_list(), [32])
 
+  def testConv2DFloat16(self):
+    height, width = 7, 9
+    images = random_ops.random_uniform((5, height, width, 4), dtype='float16')
+    output = conv_layers.conv2d(images, 32, [3, 3], activation=nn_ops.relu)
+    self.assertListEqual(output.get_shape().as_list(),
+                         [5, height - 2, width - 2, 32])
+
   def testCreateConv2DIntegerKernelSize(self):
     height, width = 7, 9
     images = random_ops.random_uniform((5, height, width, 4))
@@ -90,16 +100,14 @@ class ConvTest(test.TestCase):
     self.assertListEqual(layer.bias.get_shape().as_list(), [32])
 
   def testUnknownInputChannels(self):
-    images = random_ops.random_uniform((5, 7, 9, 4))
-    images._shape = tensor_shape.as_shape((5, 7, 9, None))
+    images = array_ops.placeholder(dtypes.float32, (5, 7, 9, None))
     layer = conv_layers.Conv2D(32, [3, 3], activation=nn_ops.relu)
     with self.assertRaisesRegexp(ValueError,
                                  'The channel dimension of the inputs '
                                  'should be defined. Found `None`.'):
       _ = layer.apply(images)
 
-    images = random_ops.random_uniform((5, 4, 7, 9))
-    images._shape = tensor_shape.as_shape((5, None, 7, 9))
+    images = array_ops.placeholder(dtypes.float32, (5, None, 7, 9))
     layer = conv_layers.Conv2D(32, [3, 3], data_format='channels_first')
     with self.assertRaisesRegexp(ValueError,
                                  'The channel dimension of the inputs '
@@ -144,6 +152,12 @@ class ConvTest(test.TestCase):
     self.assertListEqual(layer.kernel.get_shape().as_list(), [3, 4, 32])
     self.assertListEqual(layer.bias.get_shape().as_list(), [32])
 
+  def testConv1DFloat16(self):
+    width = 7
+    data = random_ops.random_uniform((5, width, 4), dtype='float16')
+    output = conv_layers.conv1d(data, 32, 3, activation=nn_ops.relu)
+    self.assertListEqual(output.get_shape().as_list(), [5, width - 2, 32])
+
   def testCreateConv1DChannelsFirst(self):
     width = 7
     data = random_ops.random_uniform((5, 4, width))
@@ -154,16 +168,14 @@ class ConvTest(test.TestCase):
     self.assertListEqual(layer.bias.get_shape().as_list(), [32])
 
   def testUnknownInputChannelsConv1D(self):
-    data = random_ops.random_uniform((5, 4, 7))
-    data._shape = tensor_shape.as_shape((5, 4, None))
+    data = array_ops.placeholder(dtypes.float32, (5, 4, None))
     layer = conv_layers.Conv1D(32, 3, activation=nn_ops.relu)
     with self.assertRaisesRegexp(ValueError,
                                  'The channel dimension of the inputs '
                                  'should be defined. Found `None`.'):
       _ = layer.apply(data)
 
-    data = random_ops.random_uniform((5, 7, 4))
-    data._shape = tensor_shape.as_shape((5, None, 4))
+    data = array_ops.placeholder(dtypes.float32, (5, None, 4))
     layer = conv_layers.Conv1D(32, 3, data_format='channels_first')
     with self.assertRaisesRegexp(ValueError,
                                  'The channel dimension of the inputs '
@@ -182,8 +194,7 @@ class ConvTest(test.TestCase):
     self.assertListEqual(layer.bias.get_shape().as_list(), [32])
 
   def testUnknownInputChannelsConv3D(self):
-    volumes = random_ops.random_uniform((5, 6, 7, 9, 9))
-    volumes._shape = tensor_shape.as_shape((5, 6, 7, 9, None))
+    volumes = array_ops.placeholder(dtypes.float32, (5, 6, 7, 9, None))
     layer = conv_layers.Conv3D(32, [3, 3, 3], activation=nn_ops.relu)
     with self.assertRaisesRegexp(ValueError,
                                  'The channel dimension of the inputs '
@@ -280,7 +291,42 @@ class ConvTest(test.TestCase):
     conv_layers.conv2d(images, 32, [3, 3])
     self.assertEqual(len(variables.trainable_variables()), 4)
 
+  def testConstraints(self):
+    # Conv1D
+    k_constraint = lambda x: x / math_ops.reduce_sum(x)
+    b_constraint = lambda x: x / math_ops.reduce_max(x)
+    conv1d = conv_layers.Conv1D(2, 3,
+                                kernel_constraint=k_constraint,
+                                bias_constraint=b_constraint)
+    inputs = random_ops.random_uniform((5, 3, 5), seed=1)
+    conv1d(inputs)
+    self.assertEqual(conv1d.kernel_constraint, k_constraint)
+    self.assertEqual(conv1d.bias_constraint, b_constraint)
 
+    # Conv2D
+    k_constraint = lambda x: x / math_ops.reduce_sum(x)
+    b_constraint = lambda x: x / math_ops.reduce_max(x)
+    conv2d = conv_layers.Conv2D(2, 3,
+                                kernel_constraint=k_constraint,
+                                bias_constraint=b_constraint)
+    inputs = random_ops.random_uniform((5, 3, 3, 5), seed=1)
+    conv2d(inputs)
+    self.assertEqual(conv2d.kernel_constraint, k_constraint)
+    self.assertEqual(conv2d.bias_constraint, b_constraint)
+
+    # Conv3D
+    k_constraint = lambda x: x / math_ops.reduce_sum(x)
+    b_constraint = lambda x: x / math_ops.reduce_max(x)
+    conv3d = conv_layers.Conv3D(2, 3,
+                                kernel_constraint=k_constraint,
+                                bias_constraint=b_constraint)
+    inputs = random_ops.random_uniform((5, 3, 3, 3, 5), seed=1)
+    conv3d(inputs)
+    self.assertEqual(conv3d.kernel_constraint, k_constraint)
+    self.assertEqual(conv3d.bias_constraint, b_constraint)
+
+
+@test_util.with_c_api
 class SeparableConv2DTest(test.TestCase):
 
   def testInvalidDataFormat(self):
@@ -392,6 +438,31 @@ class SeparableConv2DTest(test.TestCase):
     self.assertListEqual(output.get_shape().as_list(),
                          [5, height / 2, width, 32])
 
+  def testCreateSeparableConvWithStridesChannelsFirst(self):
+    data_format = 'channels_first'
+    height, width = 6, 8
+    # Test strides tuple
+    images = random_ops.random_uniform((5, 3, height, width), seed=1)
+    layer = conv_layers.SeparableConv2D(
+        32, [3, 3], strides=(2, 2), padding='same', data_format=data_format)
+    output = layer.apply(images)
+    self.assertListEqual(output.get_shape().as_list(),
+                         [5, 32, height / 2, width / 2])
+
+    # Test strides integer
+    layer = conv_layers.SeparableConv2D(32, [3, 3], strides=2, padding='same',
+                                        data_format=data_format)
+    output = layer.apply(images)
+    self.assertListEqual(output.get_shape().as_list(),
+                         [5, 32, height / 2, width / 2])
+
+    # Test unequal strides
+    layer = conv_layers.SeparableConv2D(
+        32, [3, 3], strides=(2, 1), padding='same', data_format=data_format)
+    output = layer.apply(images)
+    self.assertListEqual(output.get_shape().as_list(),
+                         [5, 32, height / 2, width])
+
   def testFunctionalConv2DReuse(self):
     height, width = 7, 9
     images = random_ops.random_uniform((5, height, width, 3), seed=1)
@@ -484,7 +555,22 @@ class SeparableConv2DTest(test.TestCase):
                          [1, 1, 4, 32])
     self.assertEqual(layer.bias, None)
 
+  def testConstraints(self):
+    d_constraint = lambda x: x / math_ops.reduce_sum(x)
+    p_constraint = lambda x: x / math_ops.reduce_sum(x)
+    b_constraint = lambda x: x / math_ops.reduce_max(x)
+    layer = conv_layers.SeparableConv2D(2, 3,
+                                        depthwise_constraint=d_constraint,
+                                        pointwise_constraint=p_constraint,
+                                        bias_constraint=b_constraint)
+    inputs = random_ops.random_uniform((5, 3, 3, 5), seed=1)
+    layer(inputs)
+    self.assertEqual(layer.depthwise_constraint, d_constraint)
+    self.assertEqual(layer.pointwise_constraint, p_constraint)
+    self.assertEqual(layer.bias_constraint, b_constraint)
 
+
+@test_util.with_c_api
 class Conv2DTransposeTest(test.TestCase):
 
   def testInvalidDataFormat(self):
@@ -521,6 +607,14 @@ class Conv2DTransposeTest(test.TestCase):
                          [5, height + 2, width + 2, 32])
     self.assertListEqual(layer.kernel.get_shape().as_list(), [3, 3, 32, 4])
     self.assertListEqual(layer.bias.get_shape().as_list(), [32])
+
+  def testConv2DTransposeFloat16(self):
+    height, width = 7, 9
+    images = random_ops.random_uniform((5, height, width, 4), dtype='float16')
+    output = conv_layers.conv2d_transpose(images, 32, [3, 3],
+                                          activation=nn_ops.relu)
+    self.assertListEqual(output.get_shape().as_list(),
+                         [5, height + 2, width + 2, 32])
 
   def testCreateConv2DTransposeIntegerKernelSize(self):
     height, width = 7, 9
@@ -650,7 +744,19 @@ class Conv2DTransposeTest(test.TestCase):
     conv_layers.conv2d_transpose(images, 32, [3, 3])
     self.assertEqual(len(variables.trainable_variables()), 4)
 
+  def testConstraints(self):
+    k_constraint = lambda x: x / math_ops.reduce_sum(x)
+    b_constraint = lambda x: x / math_ops.reduce_max(x)
+    layer = conv_layers.Conv2DTranspose(2, 3,
+                                        kernel_constraint=k_constraint,
+                                        bias_constraint=b_constraint)
+    inputs = random_ops.random_uniform((5, 3, 3, 5), seed=1)
+    layer(inputs)
+    self.assertEqual(layer.kernel_constraint, k_constraint)
+    self.assertEqual(layer.bias_constraint, b_constraint)
 
+
+@test_util.with_c_api
 class Conv3DTransposeTest(test.TestCase):
 
   def testInvalidDataFormat(self):
@@ -818,6 +924,17 @@ class Conv3DTransposeTest(test.TestCase):
     self.assertEqual(len(variables.trainable_variables()), 2)
     conv_layers.conv3d_transpose(volumes, 4, [3, 3, 3])
     self.assertEqual(len(variables.trainable_variables()), 4)
+
+  def testConstraints(self):
+    k_constraint = lambda x: x / math_ops.reduce_sum(x)
+    b_constraint = lambda x: x / math_ops.reduce_max(x)
+    layer = conv_layers.Conv3DTranspose(2, 3,
+                                        kernel_constraint=k_constraint,
+                                        bias_constraint=b_constraint)
+    inputs = random_ops.random_uniform((5, 3, 3, 3, 5), seed=1)
+    layer(inputs)
+    self.assertEqual(layer.kernel_constraint, k_constraint)
+    self.assertEqual(layer.bias_constraint, b_constraint)
 
 
 if __name__ == '__main__':

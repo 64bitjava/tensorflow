@@ -56,19 +56,20 @@ void RealMain(tensorflow::gtl::ArraySlice<char*> args, bool compile) {
           client->GetComputationShape(computation).ConsumeValueOrDie();
 
       std::vector<const Shape*> layouts;
+      layouts.reserve(program_shape->parameters_size());
       for (int i = 0; i < program_shape->parameters_size(); ++i) {
         layouts.push_back(&program_shape->parameters(i));
       }
       StatusOr<std::unique_ptr<Executable>> executable =
-          local_service->CompileExecutable(
-              computation.handle(), layouts, &program_shape->result(),
-              /*device_ordinal=*/0, /*has_hybrid_result=*/true);
+          local_service->CompileExecutable(computation.handle(), layouts,
+                                           &program_shape->result(),
+                                           /*device_ordinal=*/0);
 
       const HloModule& module = executable.ValueOrDie()->module();
 
       fprintf(stdout, "HLO compiled for %s backend:\n%s\n",
               local_service->backend().platform()->Name().c_str(),
-              module.ToString().c_str());
+              module.ToString(HloPrintOptions::ShortParsable()).c_str());
     } else {
       const ComputationTracker& tracker = local_service->computation_tracker();
       UserComputation* user_computation =
@@ -79,7 +80,8 @@ void RealMain(tensorflow::gtl::ArraySlice<char*> args, bool compile) {
           tracker.BuildHloModule(versioned_handle, HloModuleConfig())
               .ConsumeValueOrDie();
 
-      fprintf(stdout, "%s\n", module->ToString().c_str());
+      fprintf(stdout, "%s\n",
+              module->ToString(HloPrintOptions::ShortParsable()).c_str());
     }
   }
 }

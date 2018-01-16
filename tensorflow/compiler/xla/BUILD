@@ -6,7 +6,7 @@ package_group(
     name = "friends",
     packages = [
         "//tensorflow/compiler/...",
-        "//tensorflow/contrib/xla_tf_graph/...",
+        "//tensorflow/contrib/tpu/...",
     ],
 )
 
@@ -18,7 +18,12 @@ package_group(
 )
 
 load("//tensorflow:tensorflow.bzl", "cc_header_only_library")
+load("//tensorflow:tensorflow.bzl", "tf_cc_test")
 load("//tensorflow/compiler/xla:xla.bzl", "xla_proto_library")
+load(
+    "//tensorflow/core:platform/default/build_config.bzl",
+    "tf_proto_library_py",
+)
 
 # Filegroup used to collect source files for dependency checking.
 filegroup(
@@ -35,6 +40,12 @@ xla_proto_library(
     visibility = ["//visibility:public"],
 )
 
+tf_proto_library_py(
+    name = "xla_data_proto",  # bzl adds a _py suffix
+    srcs = ["xla_data.proto"],
+    visibility = ["//visibility:public"],
+)
+
 xla_proto_library(
     name = "xla_proto",
     srcs = ["xla.proto"],
@@ -45,20 +56,18 @@ xla_proto_library(
     ],
 )
 
-# This is a headers target that extra XLA devices can use to prevent
-# circular dependencies.  Devices that are compiled as separate shared
-# objects can also use it to prevent linking of library code.
-cc_header_only_library(
-    name = "xla_headers_lib",
-    visibility = ["//visibility:public"],
+cc_library(
+    name = "execution_options_util",
+    srcs = [
+        "execution_options_util.cc",
+    ],
+    hdrs = [
+        "execution_options_util.h",
+    ],
+    visibility = [":friends"],
     deps = [
-        "//tensorflow/compiler/xla:xla_data_proto",
-        "//tensorflow/compiler/xla:xla_proto",
-        "//tensorflow/compiler/xla/client:client_library",
-        "//tensorflow/compiler/xla/legacy_flags:layout_util_flags",
-        "//tensorflow/compiler/xla/service:hlo",
-        "//tensorflow/core:framework_headers_lib",
-        "//tensorflow/core:stream_executor_headers_lib",
+        ":xla_proto",
+        "//tensorflow/compiler/xla/legacy_flags:debug_options_flags",
     ],
 )
 
@@ -78,6 +87,7 @@ cc_library(
     hdrs = ["types.h"],
     visibility = [":friends"],
     deps = [
+        "//tensorflow/core:framework_lite",
         "//tensorflow/core:lib",
         "//third_party/eigen3",
     ],
@@ -106,7 +116,7 @@ cc_library(
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "status_macros_test",
     size = "small",
     srcs = ["status_macros_test.cc"],
@@ -116,7 +126,6 @@ cc_test(
         ":test",
         ":test_helpers",
         "//tensorflow/core:lib",
-        "//tensorflow/core:test",
         "//tensorflow/core:test_main",
     ],
 )
@@ -134,7 +143,10 @@ cc_library(
 cc_library(
     name = "statusor",
     srcs = ["statusor.cc"],
-    hdrs = ["statusor.h"],
+    hdrs = [
+        "statusor.h",
+        "statusor_internals.h",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         ":status",
@@ -143,7 +155,7 @@ cc_library(
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "statusor_test",
     size = "small",
     srcs = ["statusor_test.cc"],
@@ -161,6 +173,7 @@ cc_library(
     name = "util",
     srcs = ["util.cc"],
     hdrs = [
+        "iterator_util.h",
         "map_util.h",
         "ptr_util.h",
         "util.h",
@@ -168,10 +181,11 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":status",
+        ":status_macros",
         ":types",
         ":xla_data_proto",
-        "//tensorflow/compiler/xla/legacy_flags:util_flags",
         "//tensorflow/core:lib",
+        "//tensorflow/core:ptr_util",
     ],
 )
 
@@ -183,17 +197,30 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":status_macros",
+        ":statusor",
         ":types",
+        ":util",
         "//tensorflow/core:lib",
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "util_test",
     srcs = ["util_test.cc"],
     deps = [
         ":test",
         ":types",
+        ":util",
+        "//tensorflow/core:test_main",
+    ],
+)
+
+tf_cc_test(
+    name = "iterator_util_test",
+    srcs = ["iterator_util_test.cc"],
+    deps = [
+        ":test",
         ":util",
         "//tensorflow/core:test_main",
     ],
@@ -221,18 +248,19 @@ cc_library(
         ":types",
         ":util",
         ":xla_data_proto",
-        "//tensorflow/compiler/xla/legacy_flags:layout_util_flags",
         "//tensorflow/core:framework_internal",
         "//tensorflow/core:lib",
+        "//tensorflow/core:lib_internal",
         "//tensorflow/core:regexp_internal",
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "shape_util_test",
     srcs = ["shape_util_test.cc"],
     deps = [
         ":shape_util",
+        ":status_macros",
         ":test",
         ":test_helpers",
         ":types",
@@ -242,26 +270,23 @@ cc_test(
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "layout_util_test",
     srcs = ["layout_util_test.cc"],
     deps = [
         ":shape_util",
         ":test",
         ":test_helpers",
-        "//tensorflow/compiler/xla/legacy_flags:layout_util_flags",
-        "//tensorflow/core:test",
         "//tensorflow/core:test_main",
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "index_util_test",
     srcs = ["index_util_test.cc"],
     deps = [
         ":shape_util",
         ":test",
-        ":test_helpers",
         ":xla_data_proto",
         "//tensorflow/core:test_main",
     ],
@@ -276,7 +301,9 @@ cc_library(
         ":array2d",
         ":array3d",
         ":array4d",
+        ":shape_tree",
         ":shape_util",
+        ":sparse_index_array",
         ":status_macros",
         ":types",
         ":util",
@@ -285,7 +312,7 @@ cc_library(
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "literal_util_test",
     srcs = ["literal_util_test.cc"],
     deps = [
@@ -324,18 +351,39 @@ cc_library(
 )
 
 cc_library(
+    name = "array",
+    hdrs = ["array.h"],
+    deps = [
+        ":status",
+        ":types",
+        "//tensorflow/core:lib",
+    ],
+)
+
+tf_cc_test(
+    name = "array_test",
+    srcs = ["array_test.cc"],
+    deps = [
+        ":array",
+        ":test",
+        "//tensorflow/core:test_main",
+    ],
+)
+
+cc_library(
     name = "array2d",
     srcs = ["array2d.cc"],
     hdrs = ["array2d.h"],
     visibility = ["//visibility:public"],
     deps = [
+        ":array",
         ":types",
         ":util",
         "//tensorflow/core:lib",
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "array2d_test",
     srcs = ["array2d_test.cc"],
     deps = [
@@ -350,12 +398,13 @@ cc_library(
     hdrs = ["array3d.h"],
     visibility = [":friends"],
     deps = [
+        ":array",
         ":types",
         "//tensorflow/core:lib",
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "array3d_test",
     srcs = ["array3d_test.cc"],
     deps = [
@@ -371,13 +420,14 @@ cc_library(
     hdrs = ["array4d.h"],
     visibility = [":friends"],
     deps = [
+        ":array",
         ":array2d",
         ":types",
         "//tensorflow/core:lib",
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "array4d_test",
     srcs = ["array4d_test.cc"],
     deps = [
@@ -444,7 +494,7 @@ cc_library(
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "text_literal_reader_test",
     srcs = ["text_literal_reader_test.cc"],
     deps = [
@@ -474,7 +524,7 @@ cc_library(
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "text_literal_writer_test",
     srcs = ["text_literal_writer_test.cc"],
     deps = [
@@ -484,7 +534,6 @@ cc_test(
         ":text_literal_writer",
         ":types",
         "//tensorflow/core:lib",
-        "//tensorflow/core:test",
         "//tensorflow/core:test_main",
     ],
 )
@@ -499,10 +548,11 @@ cc_library(
         ":util",
         ":xla_data_proto",
         "//tensorflow/core:lib",
+        "//tensorflow/core:lib_internal",
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "shape_tree_test",
     srcs = ["shape_tree_test.cc"],
     deps = [
@@ -554,16 +604,20 @@ cc_library(
         ":xla_data_proto",
         "//tensorflow/compiler/xla/client:computation_builder",
         "//tensorflow/compiler/xla/client:padding",
+        "//tensorflow/compiler/xla/service:hlo",
+        "//tensorflow/compiler/xla/service:hlo_evaluator",
+        "//tensorflow/compiler/xla/service:shape_inference",
         "//tensorflow/compiler/xla/service/cpu:runtime_single_threaded_matmul",
         "//tensorflow/core:lib",
     ],
 )
 
-cc_test(
+tf_cc_test(
     name = "reference_util_test",
     srcs = ["reference_util_test.cc"],
     deps = [
         ":array2d",
+        ":array3d",
         ":array4d",
         ":literal_util",
         ":reference_util",
@@ -572,6 +626,28 @@ cc_test(
         ":xla_data_proto",
         "//tensorflow/compiler/xla/client:padding",
         "//tensorflow/compiler/xla/tests:literal_test_util",
+        "//tensorflow/core:test_main",
+    ],
+)
+
+cc_library(
+    name = "sparse_index_array",
+    srcs = ["sparse_index_array.cc"],
+    hdrs = ["sparse_index_array.h"],
+    deps = [
+        ":array2d",
+        ":shape_util",
+        ":xla_data_proto",
+        "//tensorflow/core:lib",
+    ],
+)
+
+tf_cc_test(
+    name = "sparse_index_array_test",
+    srcs = ["sparse_index_array_test.cc"],
+    deps = [
+        ":sparse_index_array",
+        ":test",
         "//tensorflow/core:test_main",
     ],
 )
@@ -588,4 +664,18 @@ filegroup(
         ],
     ),
     visibility = ["//tensorflow:__subpackages__"],
+)
+
+# This is a headers target that extra XLA devices can use to prevent circular dependencies.  Devices that are compiled as separate shared objects can also use it to prevent linking of library code.
+cc_header_only_library(
+    name = "xla_headers_lib",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":xla_data_proto",
+        ":xla_proto",
+        "//tensorflow/compiler/xla/client:client_library",
+        "//tensorflow/compiler/xla/service:hlo",
+        "//tensorflow/core:framework_headers_lib",
+        "//tensorflow/core:stream_executor_headers_lib",
+    ],
 )

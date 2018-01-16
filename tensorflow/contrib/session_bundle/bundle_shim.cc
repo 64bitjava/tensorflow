@@ -341,7 +341,7 @@ Status ConvertSessionBundleToSavedModelBundle(
   saved_model_bundle->session = std::move(session_bundle.session);
 
   // Copy the meta graph def from the SessionBundle to the SavedModelBundle.
-  saved_model_bundle->meta_graph_def.CopyFrom(session_bundle.meta_graph_def);
+  saved_model_bundle->meta_graph_def = session_bundle.meta_graph_def;
 
   // Convert signatures from session-bundle to signature-defs in
   // saved-model-bundle.
@@ -371,9 +371,15 @@ Status LoadSessionBundleOrSavedModelBundle(
     return LoadSavedModelFromLegacySessionBundlePath(
         session_options, run_options, export_dir, saved_model_bundle);
   }
-  return Status(error::Code::NOT_FOUND,
-                "Session bundle or SavedModel bundle not found at specified "
-                "export location");
+  return Status(
+      error::Code::NOT_FOUND,
+      strings::StrCat(
+          "Specified file path does not appear to contain a:\n"
+          "- Session bundle (should have a file called `export.meta`)\n"
+          "- or, SavedModel bundle (should have a file called "
+          "`saved_model.pb`)\n"
+          "Specified file path: ",
+          export_dir));
 }
 
 }  // namespace serving
